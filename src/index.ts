@@ -2,11 +2,9 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
 import { catalog } from "./catalog.js";
-import { SevdeskClient } from "./client.js";
 import { loadConfig } from "./config.js";
+import { createToolContext } from "./context.js";
 import { loadDotEnv } from "./lib/env.js";
-import { createProfileResolver } from "./lib/profile.js";
-import type { ToolContext } from "./lib/tool.js";
 import { VERSION, buildServer, tools } from "./server.js";
 
 async function main(): Promise<void> {
@@ -14,12 +12,9 @@ async function main(): Promise<void> {
   // client; the client's own env block still wins over anything in it.
   const envFile = loadDotEnv();
   const config = loadConfig();
-  const client = new SevdeskClient(config);
-  const ctx: ToolContext = {
-    client,
-    config,
-    getProfile: createProfileResolver(client, config),
-  };
+  // One context for the process: the VAT-profile lookup stays cached for the
+  // lifetime of the connection, as it always has over stdio.
+  const ctx = createToolContext(config);
 
   // serveStdio negotiates the protocol era per connection: 2026-07-28
   // clients get the stateless envelope, 2025-era clients the classic
