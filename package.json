@@ -2,7 +2,7 @@
   "name": "sevdesk-mcp",
   "version": "0.4.0",
   "mcpName": "io.github.joosthel/sevdesk-mcp",
-  "description": "MCP server for the sevDesk accounting API — full endpoint coverage plus bookkeeping audit tools (VAT/§13b reverse-charge checks, duplicate detection, folder↔sevDesk diff, subscription gap detection).",
+  "description": "MCP server for the sevDesk accounting API \u2014 full endpoint coverage plus bookkeeping audit tools (VAT/\u00a713b reverse-charge checks, duplicate detection, folder\u2194sevDesk diff, subscription gap detection).",
   "author": "Joost Helfers",
   "repository": {
     "type": "git",
@@ -34,6 +34,7 @@
     "build:catalog": "node scripts/build-catalog.mjs",
     "build": "npm run build:catalog && tsc && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
     "dev": "npm run build:catalog && tsx src/index.ts",
+    "dev:http": "npm run build && node scripts/serve-http.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -2,6 +2,9 @@ src/
 tests/
 scripts/
 openapi/
+api/
+public/
+vercel.json
 .github/
 server.json
 tsconfig.json
