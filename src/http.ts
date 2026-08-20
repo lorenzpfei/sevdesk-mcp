@@ -17,7 +17,6 @@
  */
 
 import {
-  bearerAuthChallengeResponse,
   createMcpHandler,
   hostHeaderValidationResponse,
   localhostAllowedHostnames,
@@ -209,15 +208,21 @@ export function createSevdeskHttpHandler(
   const allowedOrigins =
     options.allowedOrigins ?? orDerived(hostnameList(env.MCP_ALLOWED_ORIGINS), allowedHosts);
 
+  if (auth.mode === "oauth" && !auth.oauth && !options.verifyToken) {
+    throw new Error(
+      "Auth mode 'oauth' needs either an OAuth configuration (issuer and " +
+        "audience) or a verifyToken hook. Refusing to serve unauthenticated.",
+    );
+  }
   const verify: VerifyToken | undefined =
     options.verifyToken ??
-    (auth.mode === "oauth" && auth.oauth
-      ? createJwtVerifier(auth.oauth, options.hooks)
-      : undefined);
-  const issuerMetadata =
-    auth.mode === "oauth" && auth.oauth
-      ? createIssuerMetadataLoader(auth.oauth, options.hooks)
-      : undefined;
+    (auth.oauth ? createJwtVerifier(auth.oauth, options.hooks) : undefined);
+  const issuerMetadata = auth.oauth
+    ? createIssuerMetadataLoader(auth.oauth, options.hooks)
+    : undefined;
+  // A supplied verifier is the decision: it would be a trap to accept one and
+  // then serve every request anonymously because the mode still said `none`.
+  const authenticated = verify !== undefined;
 
   // One handler for the process. The factory runs per request and builds a
   // context from that request's own credentials, so two concurrent requests
@@ -233,7 +238,13 @@ export function createSevdeskHttpHandler(
     { legacy: "stateless", onerror },
   );
 
+  /**
+   * The RFC 9728 URL to name in a `WWW-Authenticate` challenge — but only
+   * when this deployment can actually serve that document. Pointing a client
+   * at a 404 is worse than not pointing it anywhere.
+   */
   function protectedResourceUrl(request: Request): string | undefined {
+    if (!issuerMetadata) return undefined;
     const resource = publicUrl ?? new URL(mcpPath, new URL(request.url).origin);
     return `${resource.origin}${PROTECTED_RESOURCE_PREFIX}${resource.pathname}`;
   }
@@ -268,7 +279,7 @@ export function createSevdeskHttpHandler(
       return json({ error: "Method not allowed." }, 405, { Allow: "GET, HEAD" });
     }
     // Deliberately says nothing about the account, the token or the mode.
-    return json({
+    const body = json({
       status: "ok",
       name: "sevdesk-mcp",
       version: VERSION,
@@ -276,12 +287,13 @@ export function createSevdeskHttpHandler(
       tools: tools.length,
       operations: catalog.operationCount,
     });
+    return request.method === "HEAD" ? new Response(null, { headers: body.headers }) : body;
   }
 
   async function wellKnown(request: Request): Promise<Response> {
     const rejected = guard(request);
     if (rejected) return rejected;
-    if (auth.mode !== "oauth" || !auth.oauth || !issuerMetadata) {
+    if (!auth.oauth || !issuerMetadata) {
       return json(
         { error: "This deployment has no authorization server configured." },
         404,
@@ -310,12 +322,8 @@ export function createSevdeskHttpHandler(
   async function mcp(request: Request): Promise<Response> {
     const rejected = guard(request);
     if (rejected) return rejected;
-    if (auth.mode === "none") return handler.fetch(request);
+    if (!authenticated || !verify) return handler.fetch(request);
 
-    if (!verify) {
-      onerror(new Error("Auth mode requires a token verifier, but none was configured."));
-      return bearerAuthChallengeResponse(new Error("no verifier configured"));
-    }
     const resourceMetadataUrl = protectedResourceUrl(request);
     const gated = await authenticate(
       request,

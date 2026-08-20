@@ -223,17 +223,67 @@ describe("JWT verification", () => {
     expect(requests).toContain(`${ISSUER}/.well-known/jwks.json`);
   });
 
-  it("caches the JWKS across tokens and refetches for an unknown kid", async () => {
+  it("caches the JWKS across tokens", async () => {
     const issuer = await createIssuer("RS256", "key-1");
     const { fetchFn, requests } = issuerFetch(ISSUER, issuer.jwks);
     const verify = createJwtVerifier(oauthConfig(), { fetchFn, now });
     await verify(new Request(MCP_URL), await issuer.sign(claims()));
     await verify(new Request(MCP_URL), await issuer.sign(claims()));
     expect(requests).toHaveLength(1);
+  });
 
-    const rotated = await issuer.sign(claims(), { kid: "key-2" });
-    await expect(verify(new Request(MCP_URL), rotated)).rejects.toThrow();
+  it("refetches once the cooldown has passed, to pick up a key rotation", async () => {
+    const issuer = await createIssuer("RS256", "key-1");
+    const { fetchFn, requests } = issuerFetch(ISSUER, issuer.jwks);
+    let clock = NOW;
+    const verify = createJwtVerifier(oauthConfig(), {
+      fetchFn,
+      now: () => clock,
+      refreshCooldownMs: 30_000,
+    });
+    await verify(new Request(MCP_URL), await issuer.sign(claims({ exp: NOW / 1000 + 86_400 })));
+    expect(requests).toHaveLength(1);
+
+    clock = NOW + 60_000;
+    const unknownKid = await issuer.sign(claims({ exp: NOW / 1000 + 86_400 }), { kid: "key-2" });
+    await expect(verify(new Request(MCP_URL), unknownKid)).rejects.toThrow(/kid 'key-2'/);
     expect(requests).toHaveLength(2);
+  });
+
+  it("does not refetch per unknown kid inside the cooldown", async () => {
+    const issuer = await createIssuer("RS256", "key-1");
+    const { fetchFn, requests } = issuerFetch(ISSUER, issuer.jwks);
+    const verify = createJwtVerifier(oauthConfig(), { fetchFn, now, refreshCooldownMs: 30_000 });
+    await verify(new Request(MCP_URL), await issuer.sign(claims()));
+    expect(requests).toHaveLength(1);
+
+    // A flood of forged key ids must not become a flood of JWKS fetches.
+    for (let i = 0; i < 20; i++) {
+      const forged = await issuer.sign(claims(), { kid: `forged-${i}` });
+      await expect(verify(new Request(MCP_URL), forged)).rejects.toThrow();
+    }
+    expect(requests).toHaveLength(1);
+  });
+
+  it("accepts an issuer that publishes iss with a trailing slash", async () => {
+    // Auth0 and friends: the documented issuer has no trailing slash, the
+    // `iss` claim does.
+    const issuer = await createIssuer();
+    const { fetchFn } = issuerFetch(ISSUER, issuer.jwks);
+    const verify = createJwtVerifier(oauthConfig(), { fetchFn, now });
+    const info = await verify(new Request(MCP_URL), await issuer.sign(claims({ iss: `${ISSUER}/` })));
+    expect(info?.clientId).toBe("client-1");
+  });
+
+  it("still rejects a different host that only looks similar", async () => {
+    const issuer = await createIssuer();
+    const { fetchFn } = issuerFetch(ISSUER, issuer.jwks);
+    const verify = createJwtVerifier(oauthConfig(), { fetchFn, now });
+    for (const iss of [`${ISSUER}.evil.test`, `${ISSUER}/tenant2`, "https://idp.example.test.evil"]) {
+      await expect(verify(new Request(MCP_URL), await issuer.sign(claims({ iss })))).rejects.toThrow(
+        /issuer/,
+      );
+    }
   });
 
   it("extracts scopes from both the scope string and the scp array", async () => {
@@ -383,6 +433,57 @@ describe("the authenticated MCP endpoint", () => {
     const token = await issuer.sign(claims({ sub: "user-42" }));
     await handler.fetch(post(listTools, { headers: { Authorization: `Bearer ${token}` } }));
     expect(seen).toEqual([{ sub: "user-42", url: MCP_URL }]);
+  });
+});
+
+describe("a supplied verifyToken hook", () => {
+  const listTools = { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} };
+
+  function hookHandler(verifyToken: Parameters<typeof createSevdeskHttpHandler>[0]["verifyToken"]) {
+    return createSevdeskHttpHandler({
+      config: testConfig(),
+      // Deliberately the local default: passing a verifier must not be
+      // silently ignored just because the mode still says `none`.
+      auth: { mode: "none" },
+      publicUrl: new URL(MCP_URL),
+      onerror: () => {},
+      verifyToken,
+      clientHooks: { fetchFn: fakeSevdesk().fetchFn },
+    });
+  }
+
+  it("guards the endpoint even when the mode says none", async () => {
+    const handler = hookHandler(() => undefined);
+    expect((await handler.fetch(post(listTools))).status).toBe(401);
+  });
+
+  it("serves a request the hook accepts", async () => {
+    const handler = hookHandler((_request, token) =>
+      token === "let-me-in"
+        ? { token, clientId: "hook", scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 600 }
+        : undefined,
+    );
+    const res = await handler.fetch(
+      post(listTools, { headers: { Authorization: "Bearer let-me-in" } }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("omits resource_metadata when no document is served there", async () => {
+    const handler = hookHandler(() => undefined);
+    const res = await handler.fetch(post(listTools));
+    expect(res.headers.get("www-authenticate")).not.toContain("resource_metadata");
+  });
+
+  it("refuses to build an oauth handler with nothing to verify with", () => {
+    expect(() =>
+      createSevdeskHttpHandler({
+        config: testConfig(),
+        auth: { mode: "oauth" },
+        publicUrl: new URL(MCP_URL),
+        onerror: () => {},
+      }),
+    ).toThrow(/Refusing to serve unauthenticated/);
   });
 });
 

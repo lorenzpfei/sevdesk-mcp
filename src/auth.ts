@@ -129,6 +129,16 @@ function invalidToken(message: string): OAuthError {
   return new OAuthError(OAuthErrorCode.InvalidToken, message);
 }
 
+/**
+ * Compare two issuer identifiers. Only the trailing slash is normalized:
+ * several major IdPs (Auth0 among them) publish `iss` with one while their
+ * documented issuer URL is written without, and a byte comparison would
+ * reject every token they sign. Host and path still have to match exactly.
+ */
+function sameIssuer(a: string, b: string): boolean {
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
 // ---------------------------------------------------------------------------
 // JWT verification
 // ---------------------------------------------------------------------------
@@ -193,15 +203,12 @@ export interface JwtVerifierHooks {
   clockSkewSec?: number;
   /** How long a fetched JWKS or discovery document is reused. */
   cacheTtlMs?: number;
+  /** Minimum spacing between refetches triggered by an unknown key id. */
+  refreshCooldownMs?: number;
 }
 
 /**
  * Fetch and cache an issuer's signing keys.
- *
- * A token whose `kid` is unknown triggers at most one refresh per cooldown
- * window — key rotation has to be picked up promptly, but an attacker
- * sending random `kid`s must not turn this server into a load generator
- * against the Authorization Server.
  */
 class JwksCache {
   private keys: Jwk[] = [];
@@ -214,17 +221,21 @@ class JwksCache {
     private readonly fetchFn: typeof fetch,
     private readonly now: () => number,
     private readonly ttlMs: number,
+    private readonly cooldownMs: number,
   ) {}
 
   async get(kid: string | undefined, alg: string): Promise<Jwk[]> {
-    const fresh = this.now() - this.fetchedAt < this.ttlMs;
-    if (fresh && this.keys.length > 0) {
-      const candidates = selectKeys(this.keys, kid, alg);
-      if (candidates.length > 0) return candidates;
-      // Unknown kid on a fresh cache: the issuer may have rotated.
-    }
-    const keys = await this.load();
-    return selectKeys(keys, kid, alg);
+    const age = this.now() - this.fetchedAt;
+    const known = selectKeys(this.keys, kid, alg);
+    if (known.length > 0 && age < this.ttlMs) return known;
+
+    // Either the cache expired or this `kid` is unknown to it. Refetching
+    // picks up a key rotation promptly — but an attacker sending random
+    // `kid`s must not turn this server into a load generator against the
+    // authorization server, so unknown-key refetches are spaced out.
+    if (this.keys.length > 0 && age < this.cooldownMs) return known;
+
+    return selectKeys(await this.load(), kid, alg);
   }
 
   private load(): Promise<Jwk[]> {
@@ -357,7 +368,13 @@ export function createJwtVerifier(oauth: OAuthConfig, hooks: JwtVerifierHooks = 
   const fetchFn = hooks.fetchFn ?? fetch;
   const now = hooks.now ?? (() => Date.now());
   const skew = hooks.clockSkewSec ?? 60;
-  const jwks = new JwksCache(oauth, fetchFn, now, hooks.cacheTtlMs ?? 300_000);
+  const jwks = new JwksCache(
+    oauth,
+    fetchFn,
+    now,
+    hooks.cacheTtlMs ?? 300_000,
+    hooks.refreshCooldownMs ?? 30_000,
+  );
 
   return async (_request, token) => {
     if (!token) return undefined;
@@ -410,7 +427,7 @@ export function createJwtVerifier(oauth: OAuthConfig, hooks: JwtVerifierHooks = 
     }
     if (!verified) throw invalidToken("Token signature does not verify against the issuer's JWKS.");
 
-    if (payload.iss !== oauth.issuer) {
+    if (typeof payload.iss !== "string" || !sameIssuer(payload.iss, oauth.issuer)) {
       throw invalidToken(`Token issuer '${String(payload.iss)}' is not ${oauth.issuer}.`);
     }
     const audiences = asStringArray(payload.aud);
