@@ -88,6 +88,23 @@ describe("loadAuthConfig", () => {
   });
 });
 
+describe("a production deployment that forgot to choose", () => {
+  it("refuses to build a handler and says what to set", () => {
+    const env = { ...process.env };
+    try {
+      process.env.VERCEL_ENV = "production";
+      process.env.SEVDESK_API_TOKEN = "unused";
+      delete process.env.MCP_AUTH_MODE;
+      // No `auth` option: the handler reads the environment, as on Vercel.
+      expect(() => createSevdeskHttpHandler({ config: testConfig(), onerror: () => {} })).toThrow(
+        /MCP_AUTH_MODE is not set[\s\S]*MCP_AUTH_MODE=oauth[\s\S]*MCP_AUTH_MODE=none/,
+      );
+    } finally {
+      process.env = env;
+    }
+  });
+});
+
 describe("JWT verification", () => {
   for (const alg of ["RS256", "PS256", "ES256"] as TestAlgorithm[]) {
     it(`accepts a valid ${alg} token`, async () => {

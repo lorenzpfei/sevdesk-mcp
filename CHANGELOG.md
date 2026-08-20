@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- Remote transport: a stateless Streamable HTTP endpoint at `POST /mcp`,
+  alongside the unchanged stdio entry point. Both are served by the same
+  `buildServer(ctx)`, so all 24 tools, all 151 operations, the schemas,
+  descriptions, annotations, tool order and the read-only filtering are
+  identical across transports — `tests/transport-parity.test.ts` asserts it
+  against the real spawned CLI. Built on the SDK's own `createMcpHandler`,
+  which serves the current protocol revision and keeps 2025-era Streamable
+  HTTP compatibility for clients that need it. No sessions, no `/sse` or
+  `/message` route, no Redis. `GET /health` reports status, version,
+  transport and counts, and calls sevDesk not at all.
+- Provider-neutral authentication around the HTTP handler: `MCP_AUTH_MODE`
+  chooses `oauth` (OAuth 2.1 bearer tokens verified as JWTs against the
+  issuer's JWKS — signature, issuer, audience, expiry, optional scopes, with
+  RFC 9728 protected-resource metadata and a correct `WWW-Authenticate`
+  challenge) or `none` for local development. A production deployment must
+  set it explicitly; an unset value there makes the endpoint refuse every
+  request rather than serve accounting data anonymously. Any other scheme plugs into a
+  `verifyToken(request, bearerToken)` hook without touching the sevDesk core.
+  Asymmetric algorithms only — an HMAC `alg` against a public JWKS is
+  refused.
+- `createToolContext` / `SevdeskCredentialResolver`: each HTTP request builds
+  its own context, sevDesk client and VAT-profile resolver, so concurrent
+  requests share no token, client or cache. The default resolver reads
+  `SEVDESK_API_TOKEN` and nothing else; the MCP access token is never the
+  sevDesk API token.
+- Vercel deployment example: `vercel.json` plus three small functions in
+  `api/`, no framework and no Next.js dependency. A fresh fork deploys with
+  documented environment variables and no source changes; the canonical URL
+  is `/mcp`. `npm run dev:http` serves the same handler locally.
+- Both READMEs document the stdio/HTTP comparison, local HTTP development,
+  the Vercel setup, how to hold `SEVDESK_API_TOKEN` server-side, the auth
+  modes, client wiring including ChatGPT Developer Mode, and the limits of a
+  serverless filesystem for the receipt-folder tools.
+
 - Optional `.env` support for runs outside an MCP client: a `.env` beside
   `package.json` is read at startup, so `npm run dev` and
   `node dist/index.js` no longer need the token pasted onto the command

@@ -127,6 +127,154 @@ cp -r node_modules/sevdesk-mcp/skills/sevdesk-bookkeeping .claude/skills/
 Clients ohne Skill-Unterstützung verlieren nichts: die `instructions`
 des Servers und die Tool-Beschreibungen tragen das Wesentliche.
 
+## Remote-Betrieb (Streamable HTTP)
+
+Derselbe Server läuft auch als entfernter MCP-Endpunkt über zustandsloses
+Streamable HTTP — für Clients, die sich mit einer URL verbinden statt einen
+Prozess zu starten (ChatGPT Developer Mode, gehostete Claude-Connectors,
+eigene Agenten).
+
+| | Lokal über stdio | Remote über Streamable HTTP |
+|---|---|---|
+| Start | `npx -y sevdesk-mcp` (der Client startet ihn) | `POST https://<dein-deployment>/mcp` |
+| Wo der Token liegt | im `env`-Block deines MCP-Clients | in einer serverseitigen Umgebungsvariable |
+| Wer ihn erreicht | nur du, auf deinem Rechner | jeder, der die Authentifizierung besteht |
+| Authentifizierung | nicht nötig — ein lokaler Prozess | OAuth-2.1-Bearer-Token (oder ausdrücklich keine) |
+| Sitzungszustand | ein Prozess pro Verbindung | keiner; jede Anfrage steht für sich |
+| Beleg-Datei-Tools | dein Dateisystem | nur mit eingebundenem, lesbarem Verzeichnis |
+| Tools | alle 24 | dieselben 24, in derselben Reihenfolge |
+
+Beide Transporte bedient dasselbe `buildServer(ctx)`. Toolnamen, Schemas,
+Beschreibungen, Annotationen und die Read-only-Filterung sind deshalb schon
+von der Konstruktion her identisch — und ein Test prüft das gegen die echte,
+tatsächlich gestartete CLI.
+
+### Lokale HTTP-Entwicklung
+
+```bash
+npm run dev:http                    # http://127.0.0.1:3000/mcp
+curl http://127.0.0.1:3000/health
+```
+
+Liest dieselbe `.env` wie `npm run dev`. Lokal ist die Authentifizierung
+standardmäßig `none`, MCP Inspector kann sich also direkt mit
+`http://127.0.0.1:3000/mcp` verbinden. Fange mit `SEVDESK_READ_ONLY=true` an.
+
+### Auf Vercel deployen
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fjoosthel%2Fsevdesk-mcp)
+
+Oder das Repository manuell importieren: **Add New → Project → Import**, das
+Framework-Preset auf *Other* lassen und die Umgebungsvariablen unten vor dem
+ersten Deploy anlegen. Den Rest übernimmt `vercel.json`: Es baut das Paket und
+leitet `/mcp`, `/health` und die OAuth-Metadatenpfade auf drei kleine
+Funktionen in `api/`. Am Quellcode ist nichts zu ändern.
+
+Node.js: `engines.node` steht auf `>=22`, danach wählt Vercel die Laufzeit.
+Wer es festnageln will, setzt **22.x** oder **24.x** unter *Settings → Build
+and Deployment → Node.js Version*.
+
+**Den sevDesk-Token sicher hinterlegen.** `SEVDESK_API_TOKEN` als
+*Environment Variable* unter *Settings → Environment Variables* anlegen —
+Vercel verschlüsselt sie und nur die Funktion liest sie zur Laufzeit. Nie in
+`vercel.json`, nie in eine Client-Konfiguration, nie in die URL. Der Server
+schickt ihn an sevDesk und sonst nirgendwohin: Er erscheint in keinem
+Tool-Ergebnis, keiner Logzeile, keiner Fehlermeldung, nicht in `/health` und
+in keinem OAuth-Metadatendokument. Ein sevDesk-Token hat keine Scopes —
+begrenze deshalb das Risiko und deploye zuerst mit `SEVDESK_READ_ONLY=true`.
+
+**Umgebungsvariablen** (nur die Namen — die Werte setzt du in Vercel):
+
+| Variable | Erforderlich | Zweck |
+|---|---|---|
+| `SEVDESK_API_TOKEN` | ja | der sevDesk-Token, ausschließlich serverseitig |
+| `MCP_AUTH_MODE` | in Produktion ja | `oauth` oder `none` — in Produktion gibt es keinen Standardwert |
+| `MCP_OAUTH_ISSUER` | bei `oauth` | Issuer-URL deines Authorization Servers |
+| `MCP_OAUTH_AUDIENCE` | bei `oauth` | Audience, für die dein IdP Token ausstellt, normalerweise deine `/mcp`-URL |
+| `MCP_OAUTH_JWKS_URI` | nein | JWKS-Endpunkt; wird sonst beim Issuer ermittelt |
+| `MCP_OAUTH_SCOPES` | nein | Scopes, die jeder Token tragen muss |
+| `MCP_PUBLIC_URL` | bei eigener Domain | deine kanonische `/mcp`-URL, gleichzeitig die Host-/Origin-Positivliste |
+| `MCP_ALLOWED_HOSTS` | nein | weitere Hostnamen, die im `Host`-Header erlaubt sind |
+| `MCP_ALLOWED_ORIGINS` | nein | Hostnamen, die im `Origin`-Header erlaubt sind |
+| `SEVDESK_VAT_REGIME` | empfohlen | ausdrücklich setzen, damit keine Anfrage das Regime aus dem Buchungsbestand ableiten muss |
+
+Alle `SEVDESK_*`-Variablen aus [Konfiguration](#konfiguration) gelten hier
+genauso, mit denselben Standardwerten — der Remote-Transport setzt keine
+eigenen, versteckten.
+
+### Authentifizierung
+
+Öffentlicher Quellcode ist nicht dasselbe wie ein öffentlicher Endpunkt.
+Dieses Repository darf jeder lesen; *deine* Buchhaltung niemand. Ein
+Deployment muss sich deshalb entscheiden:
+
+- **`MCP_AUTH_MODE=oauth`** — jede Anfrage braucht einen gültigen
+  OAuth-2.1-Bearer-Token. Token werden als JWT gegen die JWKS deines
+  Authorization Servers geprüft: Signatur (nur asymmetrische Verfahren),
+  Issuer, Audience, Ablaufzeit und, wenn konfiguriert, Scopes. Der Server
+  veröffentlicht `/.well-known/oauth-protected-resource` (RFC 9728) und
+  antwortet auf eine unauthentifizierte Anfrage mit einem
+  `WWW-Authenticate`-Challenge, der dorthin zeigt — ein Client findet den
+  Authorization Server also selbst. Jeder standardkonforme IdP funktioniert:
+  Auth0, Descope, WorkOS, Keycloak, ein eigener.
+- **`MCP_AUTH_MODE=none`** — keine Authentifizierung. Für lokale Entwicklung
+  und Tests. In einem Produktions-Deployment muss dieser Wert *ausdrücklich*
+  gesetzt sein; bleibt `MCP_AUTH_MODE` dort leer, weist der Endpunkt jede
+  Anfrage mit Begründung ab, statt stillschweigend Buchhaltungsdaten ins
+  Internet zu stellen.
+
+Dieser Server ist immer nur Resource Server: Er prüft Token und stellt keine
+aus, und ein Passwort-Login gibt es hier nicht. Für alles, was die beiden Modi
+nicht abdecken — Token-Introspection, ein IdP-SDK, ein statischer
+Entwicklungstoken — übergibst du `createSevdeskHttpHandler` einen Hook
+`verifyToken(request, bearerToken)`; am sevDesk-Kern ändert sich dadurch
+nichts. Das MCP-Zugriffstoken ist nie das sevDesk-API-Token. Welches
+sevDesk-Konto eine Anfrage erreicht, entscheidet ein
+`SevdeskCredentialResolver`, dessen Standard einfach `SEVDESK_API_TOKEN`
+liest.
+
+### Einen Client verbinden
+
+Die MCP-URL ist die vollständige HTTPS-URL von `/mcp`:
+`https://<dein-deployment>/mcp`.
+
+**ChatGPT Developer Mode** — unter *Settings → Connectors* einen Connector
+mit dieser URL anlegen, OAuth als Authentifizierung wählen und den
+Consent-Flow deines IdP durchlaufen. Das setzt `MCP_AUTH_MODE=oauth` voraus;
+ein statischer Bearer-Token lässt sich nicht in jeder ChatGPT-Oberfläche
+konfigurieren — plane also nicht damit.
+
+**MCP Inspector** — `npx @modelcontextprotocol/inspector`, Transport
+*Streamable HTTP*, URL `https://<dein-deployment>/mcp`.
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http sevdesk https://<dein-deployment>/mcp
+```
+
+**Jeder andere Streamable-HTTP-Client** — dieselbe URL eintragen. Es ist ein
+gewöhnlicher `POST`-Endpunkt, der aktuelles Streamable HTTP spricht, mit
+Kompatibilität für Clients aus der 2025er-Generation. Es gibt keine
+`/sse`- oder `/message`-Route, keinen Session-Store und kein Redis.
+
+### Grenzen eines Serverless-Deployments
+
+- `sevdesk_diff_receipt_folder`, `sevdesk_get_invoice_pdf` und
+  `sevdesk_upload_voucher_file` brauchen ein echtes, lesbares Verzeichnis aus
+  `SEVDESK_RECEIPT_DIRS`. Ein Serverless-Dateisystem ist flüchtig und enthält
+  keinen deiner Belege — auf Vercel bleiben diese Tools deshalb sichtbar und
+  liefern denselben klaren Fehler wie lokal ohne konfiguriertes Verzeichnis.
+  Für Ordnerarbeit stdio nutzen oder Speicher einbinden, den die Funktion
+  lesen kann.
+- Jede Anfrage baut ihre eigene Serverinstanz; zwischen Aufrufen wird nichts
+  zwischengespeichert. Mit `SEVDESK_VAT_REGIME=auto` heißt das: eine
+  zusätzliche Rechnungsabfrage, sobald ein Tool das Regime braucht — setze
+  das Regime remote also ausdrücklich.
+- Vercel begrenzt den Request-Body auf 4,5 MB und die Laufzeit einer Funktion
+  auf das Maximum deines Tarifs; eine sehr große Prüfung läuft besser über
+  stdio.
+
 ## Konfiguration
 
 | Variable | Standard | Zweck |
@@ -142,6 +290,10 @@ des Servers und die Tool-Beschreibungen tragen das Wesentliche.
 | `SEVDESK_MAX_RETRIES` | `3` | Wiederholungen mit gejittertem Backoff und begrenztem `Retry-After`. Ein 429 wird immer wiederholt (der gedrosselte Aufruf lief nie); ein 5xx oder Netzwerkfehler nur bei **Lesezugriffen** — ein Schreibzugriff wird bei unklarem Ausgang nie erneut gesendet, ein Timeout kann also keinen doppelten Entwurf erzeugen |
 | `SEVDESK_RATE_LIMIT` | `4` | Clientseitige Drosselung in Requests/Sekunde (Token-Bucket), damit Audit-Abfragesalven nicht mit sevDesks Limit kollidieren. `0` deaktiviert |
 | `SEVDESK_DEBUG` | `false` | Loggt `METHOD /pfad -> status` auf stderr — nie Query-Strings, Bodies oder den Token |
+
+Der Remote-Transport ergänzt `MCP_AUTH_MODE`, `MCP_OAUTH_*`, `MCP_PUBLIC_URL`,
+`MCP_ALLOWED_HOSTS` und `MCP_ALLOWED_ORIGINS` — siehe
+[Remote-Betrieb](#remote-betrieb-streamable-http). Über stdio werden sie nicht verwendet.
 
 Diese Variablen gehören in den `env`-Block deines MCP-Clients — das ist der
 unterstützte Weg und der, den der Client kontrolliert. Für Läufe außerhalb eines
@@ -204,7 +356,8 @@ Die klassische Fehlbuchung: ein Abo eines im Ausland ansässigen Anbieters, gebu
 ## Entwicklung
 
 ```bash
-npm run dev        # aus dem Quellcode starten
+npm run dev        # aus dem Quellcode starten (stdio)
+npm run dev:http   # aus dem Quellcode starten (Streamable HTTP auf :3000)
 npm test           # Unit-Tests
 npm run typecheck  # tsc --noEmit
 npm run build:catalog  # Katalog aus openapi/sevdesk-openapi.yaml neu generieren
