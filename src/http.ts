@@ -17,6 +17,7 @@
  */
 
 import {
+  buildOAuthProtectedResourceMetadata,
   createMcpHandler,
   hostHeaderValidationResponse,
   localhostAllowedHostnames,
@@ -261,11 +262,11 @@ export function createSevdeskHttpHandler(
    * Every entry point runs it — a host that mounts `mcp` directly must not
    * end up less protected than one that mounts `fetch`.
    */
-  function guard(request: Request): Response | undefined {
+  function guard(request: Request, checkOrigin = true): Response | undefined {
     const probe = validationProbe(request);
     const rejected =
       hostHeaderValidationResponse(probe, allowedHosts) ??
-      originValidationResponse(probe, allowedOrigins);
+      (checkOrigin ? originValidationResponse(probe, allowedOrigins) : undefined);
     if (!rejected) return undefined;
     onerror(
       new Error(
@@ -297,7 +298,11 @@ export function createSevdeskHttpHandler(
   }
 
   async function wellKnown(request: Request): Promise<Response> {
-    const rejected = guard(request);
+    // Origin is deliberately not checked here. These are public discovery
+    // documents that clients are expected to fetch cross-origin — the SDK
+    // even serves them with permissive CORS — and rejecting an unfamiliar
+    // Origin would only break discovery for the clients that need it most.
+    const rejected = guard(request, false);
     if (rejected) return rejected;
     if (!auth.oauth || !issuerMetadata) {
       return json(
@@ -313,16 +318,32 @@ export function createSevdeskHttpHandler(
       return json({ error: "Authorization server metadata is unavailable." }, 502);
     }
     const resource = publicUrl ?? new URL(mcpPath, new URL(request.url).origin);
-    return (
-      oauthMetadataResponse(request, {
-        oauthMetadata,
-        resourceServerUrl: resource,
-        resourceName: "sevDesk MCP",
-        ...(auth.oauth.requiredScopes.length > 0
-          ? { scopesSupported: auth.oauth.requiredScopes }
-          : {}),
-      }) ?? json({ error: "Not found." }, 404)
-    );
+    const metadataOptions = {
+      oauthMetadata,
+      resourceServerUrl: resource,
+      resourceName: "sevDesk MCP",
+      ...(auth.oauth.requiredScopes.length > 0
+        ? { scopesSupported: auth.oauth.requiredScopes }
+        : {}),
+    };
+    const served = oauthMetadataResponse(request, metadataOptions);
+    if (served) return served;
+
+    // The SDK serves the RFC 9728 document under the resource's own path
+    // (`…/oauth-protected-resource/mcp`), which is what a client that derives
+    // the URL from the resource identifier asks for. Clients that probe the
+    // bare `…/oauth-protected-resource` instead — ChatGPT's connector setup
+    // among them — would otherwise get a 404 and give up on discovery, so the
+    // same document is served there too.
+    if (new URL(request.url).pathname === PROTECTED_RESOURCE_PREFIX) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return json({ error: "Method not allowed." }, 405, { Allow: "GET, HEAD" });
+      }
+      return json(buildOAuthProtectedResourceMetadata(metadataOptions), 200, {
+        "Access-Control-Allow-Origin": "*",
+      });
+    }
+    return json({ error: "Not found." }, 404);
   }
 
   async function mcp(request: Request): Promise<Response> {
@@ -349,16 +370,18 @@ export function createSevdeskHttpHandler(
     return handler.fetch(request, { authInfo: gated });
   }
 
+  // Routing only: each endpoint runs its own guard, because they do not all
+  // want the same one. Guarding here as well would re-apply the strict Origin
+  // check to the public metadata routes and break client discovery.
   async function fetchRoute(request: Request): Promise<Response> {
-    const rejected = guard(request);
-    if (rejected) return rejected;
-
     const { pathname } = new URL(request.url);
     if (pathname === mcpPath) return mcp(request);
     if (pathname === healthPath) return health(request);
     if (pathname === AUTHORIZATION_SERVER_PATH || pathname.startsWith(PROTECTED_RESOURCE_PREFIX)) {
       return wellKnown(request);
     }
+    const rejected = guard(request);
+    if (rejected) return rejected;
     return json(
       {
         error: "Not found.",

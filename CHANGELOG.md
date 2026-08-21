@@ -22,6 +22,12 @@
   `verifyToken(request, bearerToken)` hook without touching the sevDesk core.
   Asymmetric algorithms only — an HMAC `alg` against a public JWKS is
   refused.
+- The RFC 9728 document is served both under the resource's own path
+  (`/.well-known/oauth-protected-resource/mcp`) and on the bare
+  `/.well-known/oauth-protected-resource`, because clients differ on which
+  one they probe and a 404 ends discovery. The discovery routes are also
+  exempt from Origin validation: they are public metadata that clients fetch
+  cross-origin, and the MCP endpoint itself still refuses a foreign Origin.
 - `MCP_AUTH_MODE=token`: one shared secret in `MCP_STATIC_TOKEN`, compared in
   constant time (both sides hashed first, so neither length nor a partial
   match leaks through timing), minimum 32 characters. Closes off a

@@ -614,6 +614,55 @@ describe("protected resource metadata", () => {
     });
   });
 
+  it("serves the same document on the bare well-known path, for clients that probe it", async () => {
+    const handler = await metadataHandler();
+    const [suffixed, bare] = await Promise.all([
+      handler
+        .fetch(new Request(`${TEST_ORIGIN}/.well-known/oauth-protected-resource/mcp`))
+        .then((r) => r.json()),
+      handler
+        .fetch(new Request(`${TEST_ORIGIN}/.well-known/oauth-protected-resource`))
+        .then((r) => r.json()),
+    ]);
+    expect(bare).toEqual(suffixed);
+    expect(bare).toMatchObject({ resource: MCP_URL, authorization_servers: [ISSUER] });
+  });
+
+  it("lets a foreign Origin read the public discovery documents", async () => {
+    // Blocking these would break connector setup in any client that fetches
+    // discovery from a browser context.
+    const handler = await metadataHandler();
+    for (const path of [
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+      "/.well-known/oauth-authorization-server",
+    ]) {
+      const res = await handler.fetch(
+        new Request(`${TEST_ORIGIN}${path}`, { headers: { Origin: "https://chatgpt.com" } }),
+      );
+      expect(res.status, path).toBe(200);
+    }
+  });
+
+  it("still refuses a foreign Origin on the MCP endpoint itself", async () => {
+    const handler = await metadataHandler();
+    const res = await handler.fetch(
+      post(
+        { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+        { headers: { Origin: "https://chatgpt.com" } },
+      ),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a write method on the bare well-known path", async () => {
+    const handler = await metadataHandler();
+    const res = await handler.fetch(
+      new Request(`${TEST_ORIGIN}/.well-known/oauth-protected-resource`, { method: "POST" }),
+    );
+    expect(res.status).toBe(405);
+  });
+
   it("has no metadata to serve when auth is off", async () => {
     const handler = createHandler();
     const res = await handler.fetch(
