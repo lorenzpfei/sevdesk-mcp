@@ -22,6 +22,11 @@
   `verifyToken(request, bearerToken)` hook without touching the sevDesk core.
   Asymmetric algorithms only — an HMAC `alg` against a public JWKS is
   refused.
+- A rejected bearer token now logs why — including both audiences on the
+  most common misconfiguration, where the authorization server issues an
+  `aud` other than the configured resource identifier. The caller still gets
+  only a generic `invalid_token` challenge, so the diagnostic reaches the
+  operator's logs without telling an attacker how validation works.
 - The RFC 9728 document is served both under the resource's own path
   (`/.well-known/oauth-protected-resource/mcp`) and on the bare
   `/.well-known/oauth-protected-resource`, because clients differ on which

@@ -250,6 +250,54 @@ describe("JWT verification", () => {
     await expect(verify(new Request(MCP_URL), token)).rejects.toThrow(/audience/);
   });
 
+  it("names both audiences on a mismatch, so the fix is one env var away", async () => {
+    const issuer = await createIssuer();
+    const { fetchFn } = issuerFetch(ISSUER, issuer.jwks);
+    const verify = createJwtVerifier(oauthConfig(), { fetchFn, now });
+    const token = await issuer.sign(claims({ aud: "client_01ABCDEF" }));
+    await expect(verify(new Request(MCP_URL), token)).rejects.toThrow(
+      /expected '.*\/mcp'.*token carries 'client_01ABCDEF'.*MCP_OAUTH_AUDIENCE/s,
+    );
+  });
+
+  it("says so when the token carries no audience at all", async () => {
+    const issuer = await createIssuer();
+    const { fetchFn } = issuerFetch(ISSUER, issuer.jwks);
+    const verify = createJwtVerifier(oauthConfig(), { fetchFn, now });
+    const { aud: _aud, ...rest } = claims();
+    await expect(verify(new Request(MCP_URL), await issuer.sign(rest))).rejects.toThrow(
+      /no 'aud' claim/,
+    );
+  });
+
+  it("logs the real reason for the operator while the client sees only a challenge", async () => {
+    const issuer = await createIssuer();
+    const { fetchFn } = issuerFetch(ISSUER, issuer.jwks);
+    const logged: string[] = [];
+    const handler = createSevdeskHttpHandler({
+      config: testConfig(),
+      auth: { mode: "oauth", oauth: oauthConfig() },
+      publicUrl: new URL(MCP_URL),
+      onerror: (e) => logged.push(e.message),
+      hooks: { fetchFn, now },
+      clientHooks: { fetchFn: fakeSevdesk().fetchFn },
+    });
+    const token = await issuer.sign(claims({ aud: "client_01ABCDEF" }));
+    const res = await handler.fetch(
+      post(
+        { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+        { headers: { Authorization: `Bearer ${token}` } },
+      ),
+    );
+    expect(res.status).toBe(401);
+    expect(logged.join("\n")).toMatch(/Token rejected: .*audience mismatch.*client_01ABCDEF/s);
+    // The wire response must not hand an attacker the diagnostic.
+    const wire = await res.text();
+    expect(wire).not.toContain("MCP_OAUTH_AUDIENCE");
+    expect(wire).not.toContain("client_01ABCDEF");
+    expect(wire).toContain("invalid_token");
+  });
+
   it("refuses a token from another issuer even when correctly signed", async () => {
     const issuer = await createIssuer();
     const { fetchFn } = issuerFetch(ISSUER, issuer.jwks);

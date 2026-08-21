@@ -513,7 +513,16 @@ export function createJwtVerifier(oauth: OAuthConfig, hooks: JwtVerifierHooks = 
     }
     const audiences = asStringArray(payload.aud);
     if (!audiences.includes(oauth.audience)) {
-      throw invalidToken(`Token audience does not include ${oauth.audience}.`);
+      // Naming both sides turns the most common misconfiguration — an
+      // authorization server that mints a different `aud` than the resource
+      // identifier configured here — into a one-line fix instead of a guess.
+      // An audience is a public identifier, so echoing it leaks nothing.
+      throw invalidToken(
+        `Token audience mismatch: expected '${oauth.audience}', token carries ` +
+          `${audiences.length ? audiences.map((a) => `'${a}'`).join(", ") : "no 'aud' claim"}. ` +
+          `Set MCP_OAUTH_AUDIENCE to the value your authorization server issues, ` +
+          `or configure that server to use the resource identifier.`,
+      );
     }
 
     const nowSec = now() / 1000;

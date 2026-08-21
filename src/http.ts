@@ -167,13 +167,28 @@ async function authenticate(
   verify: VerifyToken,
   requiredScopes: string[],
   resourceMetadataUrl: string | undefined,
+  onerror: (error: Error) => void,
 ): Promise<AuthInfo | Response> {
   const gate = requireBearerAuth({
     verifier: {
       async verifyAccessToken(token) {
-        const info = await verify(request, token);
-        if (!info) throw new OAuthError(OAuthErrorCode.InvalidToken, "Token was not accepted.");
-        return info;
+        try {
+          const info = await verify(request, token);
+          if (!info) throw new OAuthError(OAuthErrorCode.InvalidToken, "Token was not accepted.");
+          return info;
+        } catch (err) {
+          // The operator needs the actual reason; the caller must not get it.
+          // The SDK renders a thrown OAuthError's message into the response's
+          // `error_description`, so the detailed message is logged and a
+          // deliberately dull one goes on the wire — same error code, so the
+          // status and challenge are unchanged.
+          onerror(
+            new Error(`Token rejected: ${err instanceof Error ? err.message : String(err)}`),
+          );
+          throw OAuthError.isInstance(err)
+            ? new OAuthError(err.code, "The access token was not accepted.")
+            : err;
+        }
       },
     },
     requiredScopes,
@@ -357,6 +372,7 @@ export function createSevdeskHttpHandler(
       verify,
       auth.oauth?.requiredScopes ?? [],
       resourceMetadataUrl,
+      onerror,
     );
     if (gated instanceof Response) {
       onerror(
