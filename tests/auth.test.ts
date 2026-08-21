@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { createJwtVerifier, loadAuthConfig, type OAuthConfig } from "../src/auth.js";
+import {
+  MIN_STATIC_TOKEN_LENGTH,
+  createJwtVerifier,
+  createStaticTokenVerifier,
+  loadAuthConfig,
+  type OAuthConfig,
+} from "../src/auth.js";
 import { createSevdeskHttpHandler } from "../src/http.js";
 import {
   MCP_URL,
@@ -102,6 +108,89 @@ describe("a production deployment that forgot to choose", () => {
     } finally {
       process.env = env;
     }
+  });
+});
+
+const SECRET = "a".repeat(16) + "b".repeat(16) + "c";
+
+describe("token mode", () => {
+  const listTools = { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} };
+
+  it("requires a secret", () => {
+    expect(() =>
+      loadAuthConfig({ MCP_AUTH_MODE: "token" } as NodeJS.ProcessEnv),
+    ).toThrow(/MCP_STATIC_TOKEN/);
+  });
+
+  it("refuses a secret short enough to brute-force", () => {
+    expect(() =>
+      loadAuthConfig({ MCP_AUTH_MODE: "token", MCP_STATIC_TOKEN: "hunter2" } as NodeJS.ProcessEnv),
+    ).toThrow(new RegExp(`too short.*${MIN_STATIC_TOKEN_LENGTH}`, "s"));
+  });
+
+  it("accepts a long secret", () => {
+    expect(
+      loadAuthConfig({ MCP_AUTH_MODE: "token", MCP_STATIC_TOKEN: SECRET } as NodeJS.ProcessEnv),
+    ).toEqual({ mode: "token", staticToken: SECRET });
+  });
+
+  it("accepts the secret and refuses everything else", async () => {
+    const verify = createStaticTokenVerifier(SECRET, { now });
+    expect(await verify(new Request(MCP_URL), SECRET)).toMatchObject({
+      clientId: "static-token",
+      expiresAt: NOW / 1000 + 300,
+    });
+    for (const wrong of [undefined, "", "wrong", SECRET.slice(0, -1), SECRET + "x", SECRET.toUpperCase()]) {
+      expect(await verify(new Request(MCP_URL), wrong), String(wrong)).toBeUndefined();
+    }
+  });
+
+  function tokenHandler() {
+    return createSevdeskHttpHandler({
+      config: testConfig(),
+      auth: { mode: "token", staticToken: SECRET },
+      publicUrl: new URL(MCP_URL),
+      onerror: () => {},
+      clientHooks: { fetchFn: fakeSevdesk().fetchFn },
+    });
+  }
+
+  it("challenges a request with no secret", async () => {
+    const res = await tokenHandler().fetch(post(listTools));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toMatch(/^Bearer/);
+  });
+
+  it("refuses a wrong secret", async () => {
+    const res = await tokenHandler().fetch(
+      post(listTools, { headers: { Authorization: "Bearer nope" } }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("serves the right secret", async () => {
+    const res = await tokenHandler().fetch(
+      post(listTools, { headers: { Authorization: `Bearer ${SECRET}` } }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await rpcBody(res)) as { result?: { tools?: unknown[] } };
+    expect(body.result?.tools).toHaveLength(24);
+  });
+
+  it("never echoes the secret back", async () => {
+    const handler = tokenHandler();
+    for (const request of [post(listTools), new Request(`${TEST_ORIGIN}/health`)]) {
+      const res = await handler.fetch(request);
+      const seen = `${[...res.headers].join(" ")} ${await res.text()}`;
+      expect(seen).not.toContain(SECRET);
+    }
+  });
+
+  it("advertises no OAuth metadata, since there is no authorization server", async () => {
+    const res = await tokenHandler().fetch(
+      new Request(`${TEST_ORIGIN}/.well-known/oauth-protected-resource/mcp`),
+    );
+    expect(res.status).toBe(404);
   });
 });
 

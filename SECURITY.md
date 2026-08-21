@@ -41,6 +41,12 @@ so.
   no default in a production deployment: unset, the endpoint refuses every
   request rather than publish your books. `MCP_AUTH_MODE=none` stays available for
   local development and has to be chosen deliberately.
+- **`token` mode trades identity for immediacy, not for safety.** The shared
+  secret must be at least 32 characters and is compared in constant time over
+  hashed values, so neither its length nor a partial guess leaks through
+  timing. What it cannot give you is per-user identity, expiry, or revocation
+  without rotating the secret — so treat it as a lock on a door, not as an
+  audit trail, and prefer `oauth` when more than one person holds the key.
 - **Remote tokens are verified, not trusted.** In `oauth` mode a bearer token
   must be a JWT that verifies against the issuer's JWKS, with a matching
   `iss`, an `aud` naming this server, and an unexpired `exp` (plus configured

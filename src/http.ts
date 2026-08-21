@@ -35,6 +35,7 @@ import {
   bearerToken,
   createIssuerMetadataLoader,
   createJwtVerifier,
+  createStaticTokenVerifier,
   loadAuthConfig,
   type AuthConfig,
   type JwtVerifierHooks,
@@ -208,15 +209,20 @@ export function createSevdeskHttpHandler(
   const allowedOrigins =
     options.allowedOrigins ?? orDerived(hostnameList(env.MCP_ALLOWED_ORIGINS), allowedHosts);
 
-  if (auth.mode === "oauth" && !auth.oauth && !options.verifyToken) {
+  if (auth.mode !== "none" && !auth.oauth && !auth.staticToken && !options.verifyToken) {
     throw new Error(
-      "Auth mode 'oauth' needs either an OAuth configuration (issuer and " +
-        "audience) or a verifyToken hook. Refusing to serve unauthenticated.",
+      `Auth mode '${auth.mode}' needs something to verify with — an OAuth ` +
+        `configuration, a static token, or a verifyToken hook. Refusing to ` +
+        `serve unauthenticated.`,
     );
   }
   const verify: VerifyToken | undefined =
     options.verifyToken ??
-    (auth.oauth ? createJwtVerifier(auth.oauth, options.hooks) : undefined);
+    (auth.oauth
+      ? createJwtVerifier(auth.oauth, options.hooks)
+      : auth.staticToken
+        ? createStaticTokenVerifier(auth.staticToken, options.hooks)
+        : undefined);
   const issuerMetadata = auth.oauth
     ? createIssuerMetadataLoader(auth.oauth, options.hooks)
     : undefined;

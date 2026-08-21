@@ -3,10 +3,15 @@
  *
  * This server is a Resource Server, never an Authorization Server: it
  * verifies access tokens an external IdP issued and never mints, stores or
- * exchanges credentials of its own. Two modes ship:
+ * exchanges credentials of its own. Three modes ship:
  *
  *   - `oauth` — OAuth 2.1 bearer tokens verified as JWTs against the
  *     issuer's JWKS (signature, issuer, audience, expiry, optional scopes);
+ *   - `token` — one shared secret, compared in constant time. No IdP to set
+ *     up, so a single-operator deployment can be closed off immediately; the
+ *     trade-off is no per-user identity, no expiry and no revocation short of
+ *     rotating the secret. Clients that cannot send an `Authorization` header
+ *     (ChatGPT Developer Mode among them) need `oauth`.
  *   - `none` — no authentication, for local development and tests only.
  *
  * Anything else plugs in through {@link VerifyToken}: return an `AuthInfo`
@@ -27,7 +32,7 @@ import {
   type OAuthMetadata,
 } from "@modelcontextprotocol/server";
 
-export type AuthMode = "none" | "oauth";
+export type AuthMode = "none" | "token" | "oauth";
 
 /**
  * Verify one request's bearer token.
@@ -55,9 +60,18 @@ export interface OAuthConfig {
 export interface AuthConfig {
   mode: AuthMode;
   oauth?: OAuthConfig;
+  /** The shared secret for `token` mode. Never logged, never echoed. */
+  staticToken?: string;
 }
 
-const AUTH_MODES: AuthMode[] = ["none", "oauth"];
+const AUTH_MODES: AuthMode[] = ["none", "token", "oauth"];
+
+/**
+ * Shortest shared secret accepted in `token` mode. A hand-typed password
+ * would be brute-forceable against an endpoint that holds a whole ledger,
+ * and there is no rate limiter in front of this one.
+ */
+export const MIN_STATIC_TOKEN_LENGTH = 32;
 
 /** True for a deployment that must not serve accounting data anonymously by accident. */
 export function isProductionLike(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -78,9 +92,10 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
     if (isProductionLike(env)) {
       throw new Error(
         "MCP_AUTH_MODE is not set. A production deployment must choose its " +
-          "authentication explicitly: set MCP_AUTH_MODE=oauth (with " +
+          "authentication explicitly: MCP_AUTH_MODE=oauth (with " +
           "MCP_OAUTH_ISSUER and MCP_OAUTH_AUDIENCE) to require OAuth 2.1 " +
-          "bearer tokens, or MCP_AUTH_MODE=none to knowingly publish this " +
+          "bearer tokens, MCP_AUTH_MODE=token (with MCP_STATIC_TOKEN) for one " +
+          "shared secret, or MCP_AUTH_MODE=none to knowingly publish this " +
           "sevDesk account without any authentication.",
       );
     }
@@ -93,6 +108,26 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
     );
   }
   if (raw === "none") return { mode: "none" };
+
+  if (raw === "token") {
+    const staticToken = env.MCP_STATIC_TOKEN?.trim();
+    if (!staticToken) {
+      throw new Error(
+        "MCP_AUTH_MODE=token requires MCP_STATIC_TOKEN — the shared secret " +
+          "clients send as 'Authorization: Bearer <secret>'. Generate one with " +
+          "`openssl rand -hex 32`.",
+      );
+    }
+    if (staticToken.length < MIN_STATIC_TOKEN_LENGTH) {
+      throw new Error(
+        `MCP_STATIC_TOKEN is too short (${staticToken.length} characters). ` +
+          `Use at least ${MIN_STATIC_TOKEN_LENGTH}: this single secret is the ` +
+          `only thing between the internet and the account's books. ` +
+          `Generate one with \`openssl rand -hex 32\`.`,
+      );
+    }
+    return { mode: "token", staticToken };
+  }
 
   const issuer = env.MCP_OAUTH_ISSUER?.trim();
   const audience = env.MCP_OAUTH_AUDIENCE?.trim();
@@ -137,6 +172,52 @@ function invalidToken(message: string): OAuthError {
  */
 function sameIssuer(a: string, b: string): boolean {
   return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
+
+/**
+ * Compare two secrets without leaking their contents through timing.
+ *
+ * Both sides are hashed first, so the comparison runs over two fixed-length
+ * digests and its duration reveals neither the secret's length nor how many
+ * leading characters a guess got right.
+ */
+async function secretsMatch(a: string, b: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [left, right] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(a)),
+    crypto.subtle.digest("SHA-256", encoder.encode(b)),
+  ]);
+  const x = new Uint8Array(left);
+  const y = new Uint8Array(right);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i]! ^ y[i]!;
+  return diff === 0;
+}
+
+/**
+ * A {@link VerifyToken} that accepts exactly one shared secret.
+ *
+ * Deliberately minimal: there is no identity to report, so every accepted
+ * request looks the same to the credential resolver. `expiresAt` is required
+ * by the SDK's bearer layer and is set a short way ahead of now — the value
+ * describes this one request's authorization, not a token lifetime, because a
+ * shared secret has none.
+ */
+export function createStaticTokenVerifier(
+  staticToken: string,
+  hooks: Pick<JwtVerifierHooks, "now"> = {},
+): VerifyToken {
+  const now = hooks.now ?? (() => Date.now());
+  return async (_request, token) => {
+    if (!token) return undefined;
+    if (!(await secretsMatch(token, staticToken))) return undefined;
+    return {
+      token,
+      clientId: "static-token",
+      scopes: [],
+      expiresAt: Math.floor(now() / 1000) + 300,
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------

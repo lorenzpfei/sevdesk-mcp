@@ -22,6 +22,12 @@
   `verifyToken(request, bearerToken)` hook without touching the sevDesk core.
   Asymmetric algorithms only — an HMAC `alg` against a public JWKS is
   refused.
+- `MCP_AUTH_MODE=token`: one shared secret in `MCP_STATIC_TOKEN`, compared in
+  constant time (both sides hashed first, so neither length nor a partial
+  match leaks through timing), minimum 32 characters. Closes off a
+  single-operator remote deployment without standing up an IdP; no identity,
+  no expiry, no revocation but rotation, and no use for clients that cannot
+  send an `Authorization` header.
 - `createToolContext` / `SevdeskCredentialResolver`: each HTTP request builds
   its own context, sevDesk client and VAT-profile resolver, so concurrent
   requests share no token, client or cache. The default resolver reads

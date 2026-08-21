@@ -189,7 +189,8 @@ first.
 | Variable | Required | Purpose |
 |---|---|---|
 | `SEVDESK_API_TOKEN` | yes | the sevDesk token, server-side only |
-| `MCP_AUTH_MODE` | yes in production | `oauth` or `none` — there is no default in production |
+| `MCP_AUTH_MODE` | yes in production | `oauth`, `token` or `none` — there is no default in production |
+| `MCP_STATIC_TOKEN` | with `token` | the shared secret, at least 32 characters |
 | `MCP_OAUTH_ISSUER` | with `oauth` | issuer URL of your authorization server |
 | `MCP_OAUTH_AUDIENCE` | with `oauth` | audience your IdP issues tokens for, normally your `/mcp` URL |
 | `MCP_OAUTH_JWKS_URI` | no | JWKS endpoint; discovered from the issuer when unset |
@@ -217,6 +218,12 @@ deployment therefore has to say what it wants:
   unauthenticated request with a `WWW-Authenticate` challenge pointing there,
   so a client can discover the authorization server on its own. Any
   standards-compliant IdP works — Auth0, Descope, WorkOS, Keycloak, your own.
+- **`MCP_AUTH_MODE=token`** — one shared secret in `MCP_STATIC_TOKEN`, which
+  clients send as `Authorization: Bearer <secret>`. Compared in constant time,
+  minimum 32 characters. No IdP to set up, so a single-operator deployment can
+  be closed off in a minute — at the cost of no per-user identity, no expiry
+  and no revocation short of rotating the secret. Clients that cannot send an
+  `Authorization` header, ChatGPT Developer Mode among them, need `oauth`.
 - **`MCP_AUTH_MODE=none`** — no authentication. For local development and
   tests. In a production deployment it must be set *explicitly*; with
   `MCP_AUTH_MODE` unset there, the endpoint refuses every request and says
@@ -287,7 +294,7 @@ compatibility for clients that have not moved yet. There is no `/sse` or
 | `SEVDESK_RATE_LIMIT` | `4` | Client-side pacing in requests/second (token bucket), so bursty audit fan-outs don't collide with sevDesk's throttle. `0` disables pacing |
 | `SEVDESK_DEBUG` | `false` | Log `METHOD /path -> status` to stderr — never query strings, bodies or the token |
 
-The remote transport adds `MCP_AUTH_MODE`, `MCP_OAUTH_*`, `MCP_PUBLIC_URL`,
+The remote transport adds `MCP_AUTH_MODE`, `MCP_STATIC_TOKEN`, `MCP_OAUTH_*`, `MCP_PUBLIC_URL`,
 `MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGINS` — see
 [Remote deployment](#remote-deployment-streamable-http). They are unused over stdio.
 

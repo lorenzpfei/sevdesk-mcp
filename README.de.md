@@ -188,7 +188,8 @@ begrenze deshalb das Risiko und deploye zuerst mit `SEVDESK_READ_ONLY=true`.
 | Variable | Erforderlich | Zweck |
 |---|---|---|
 | `SEVDESK_API_TOKEN` | ja | der sevDesk-Token, ausschließlich serverseitig |
-| `MCP_AUTH_MODE` | in Produktion ja | `oauth` oder `none` — in Produktion gibt es keinen Standardwert |
+| `MCP_AUTH_MODE` | in Produktion ja | `oauth`, `token` oder `none` — in Produktion gibt es keinen Standardwert |
+| `MCP_STATIC_TOKEN` | bei `token` | das gemeinsame Geheimnis, mindestens 32 Zeichen |
 | `MCP_OAUTH_ISSUER` | bei `oauth` | Issuer-URL deines Authorization Servers |
 | `MCP_OAUTH_AUDIENCE` | bei `oauth` | Audience, für die dein IdP Token ausstellt, normalerweise deine `/mcp`-URL |
 | `MCP_OAUTH_JWKS_URI` | nein | JWKS-Endpunkt; wird sonst beim Issuer ermittelt |
@@ -217,6 +218,13 @@ Deployment muss sich deshalb entscheiden:
   `WWW-Authenticate`-Challenge, der dorthin zeigt — ein Client findet den
   Authorization Server also selbst. Jeder standardkonforme IdP funktioniert:
   Auth0, Descope, WorkOS, Keycloak, ein eigener.
+- **`MCP_AUTH_MODE=token`** — ein gemeinsames Geheimnis in
+  `MCP_STATIC_TOKEN`, das Clients als `Authorization: Bearer <secret>`
+  senden. Vergleich in konstanter Zeit, mindestens 32 Zeichen. Kein IdP
+  nötig, ein Ein-Personen-Deployment ist damit in einer Minute dicht — dafür
+  ohne Benutzeridentität, ohne Ablauf und ohne Widerruf außer durch Rotation
+  des Geheimnisses. Clients, die keinen `Authorization`-Header senden können,
+  darunter ChatGPT Developer Mode, brauchen `oauth`.
 - **`MCP_AUTH_MODE=none`** — keine Authentifizierung. Für lokale Entwicklung
   und Tests. In einem Produktions-Deployment muss dieser Wert *ausdrücklich*
   gesetzt sein; bleibt `MCP_AUTH_MODE` dort leer, weist der Endpunkt jede
@@ -291,7 +299,7 @@ Kompatibilität für Clients aus der 2025er-Generation. Es gibt keine
 | `SEVDESK_RATE_LIMIT` | `4` | Clientseitige Drosselung in Requests/Sekunde (Token-Bucket), damit Audit-Abfragesalven nicht mit sevDesks Limit kollidieren. `0` deaktiviert |
 | `SEVDESK_DEBUG` | `false` | Loggt `METHOD /pfad -> status` auf stderr — nie Query-Strings, Bodies oder den Token |
 
-Der Remote-Transport ergänzt `MCP_AUTH_MODE`, `MCP_OAUTH_*`, `MCP_PUBLIC_URL`,
+Der Remote-Transport ergänzt `MCP_AUTH_MODE`, `MCP_STATIC_TOKEN`, `MCP_OAUTH_*`, `MCP_PUBLIC_URL`,
 `MCP_ALLOWED_HOSTS` und `MCP_ALLOWED_ORIGINS` — siehe
 [Remote-Betrieb](#remote-betrieb-streamable-http). Über stdio werden sie nicht verwendet.
 
