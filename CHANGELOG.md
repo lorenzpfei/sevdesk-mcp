@@ -44,10 +44,15 @@
   requests share no token, client or cache. The default resolver reads
   `SEVDESK_API_TOKEN` and nothing else; the MCP access token is never the
   sevDesk API token.
-- Vercel deployment example: `vercel.json` plus three small functions in
-  `api/`, no framework and no Next.js dependency. A fresh fork deploys with
-  documented environment variables and no source changes; the canonical URL
-  is `/mcp`. `npm run dev:http` serves the same handler locally.
+- Vercel deployment example: `vercel.json` plus a single `index.js` at the
+  repository root, no framework and no Next.js dependency. The root file is
+  deliberate — Vercel picks one root entrypoint for the whole deployment, and
+  left to auto-detection it picks `src/index.ts`, the stdio CLI, which exports
+  no handler and answers every route with a 500. Owning that slot also means
+  the platform passes the original request path, so `/mcp`, `/health` and the
+  well-known routes need no rewrite rules. A fresh fork deploys with
+  documented environment variables and no source changes. `node index.js`
+  serves the identical handler locally.
 - Both READMEs document the stdio/HTTP comparison, local HTTP development,
   the Vercel setup, how to hold `SEVDESK_API_TOKEN` server-side, the auth
   modes, client wiring including ChatGPT Developer Mode, and the limits of a

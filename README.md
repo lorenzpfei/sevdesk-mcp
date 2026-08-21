@@ -157,6 +157,7 @@ npm run dev:http                    # http://127.0.0.1:3000/mcp
 curl http://127.0.0.1:3000/health
 ```
 
+Same entry point as the deployment (`index.js`), just listening on a port.
 Reads the same `.env` as `npm run dev`. Auth defaults to `none` locally, so
 MCP Inspector can connect to `http://127.0.0.1:3000/mcp` straight away. Start
 with `SEVDESK_READ_ONLY=true`.
@@ -167,9 +168,11 @@ with `SEVDESK_READ_ONLY=true`.
 
 Or import the repository manually: **Add New → Project → Import** your fork,
 leave the framework preset on *Other*, and add the environment variables
-below before the first deploy. `vercel.json` handles the rest — it builds the
-package and routes `/mcp`, `/health` and the OAuth metadata paths onto three
-small functions in `api/`. No source changes are needed.
+below before the first deploy. `vercel.json` handles the rest: it builds the
+package, and `index.js` at the repository root is the entry point Vercel picks
+up — one handler that routes `/mcp`, `/health` and the OAuth metadata paths
+itself, so there are no rewrite rules to keep in sync. No source changes are
+needed.
 
 Node.js: `engines.node` is `>=22`, which is what Vercel selects the runtime
 from. Pin **22.x** or **24.x** in *Settings → Build and Deployment → Node.js

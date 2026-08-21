@@ -2,7 +2,7 @@ src/
 tests/
 scripts/
 openapi/
-api/
+index.js
 public/
 vercel.json
 .github/

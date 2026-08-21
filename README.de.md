@@ -156,6 +156,7 @@ npm run dev:http                    # http://127.0.0.1:3000/mcp
 curl http://127.0.0.1:3000/health
 ```
 
+Derselbe Einstiegspunkt wie im Deployment (`index.js`), nur auf einem Port.
 Liest dieselbe `.env` wie `npm run dev`. Lokal ist die Authentifizierung
 standardmäßig `none`, MCP Inspector kann sich also direkt mit
 `http://127.0.0.1:3000/mcp` verbinden. Fange mit `SEVDESK_READ_ONLY=true` an.
@@ -166,9 +167,11 @@ standardmäßig `none`, MCP Inspector kann sich also direkt mit
 
 Oder das Repository manuell importieren: **Add New → Project → Import**, das
 Framework-Preset auf *Other* lassen und die Umgebungsvariablen unten vor dem
-ersten Deploy anlegen. Den Rest übernimmt `vercel.json`: Es baut das Paket und
-leitet `/mcp`, `/health` und die OAuth-Metadatenpfade auf drei kleine
-Funktionen in `api/`. Am Quellcode ist nichts zu ändern.
+ersten Deploy anlegen. Den Rest übernimmt `vercel.json`: Es baut das Paket, und
+`index.js` im Wurzelverzeichnis ist der Einstiegspunkt, den Vercel aufgreift —
+ein Handler, der `/mcp`, `/health` und die OAuth-Metadatenpfade selbst
+verteilt, also keine Rewrite-Regeln, die auseinanderlaufen können. Am
+Quellcode ist nichts zu ändern.
 
 Node.js: `engines.node` steht auf `>=22`, danach wählt Vercel die Laufzeit.
 Wer es festnageln will, setzt **22.x** oder **24.x** unter *Settings → Build
