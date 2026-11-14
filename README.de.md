@@ -197,6 +197,7 @@ begrenze deshalb das Risiko und deploye zuerst mit `SEVDESK_READ_ONLY=true`.
 | `MCP_OAUTH_AUDIENCE` | bei `oauth` | Audience, für die dein IdP Token ausstellt, normalerweise deine `/mcp`-URL |
 | `MCP_OAUTH_JWKS_URI` | nein | JWKS-Endpunkt; wird sonst beim Issuer ermittelt |
 | `MCP_OAUTH_SCOPES` | nein | Scopes, die jeder Token tragen muss |
+| `MCP_OAUTH_SUBJECTS` | nein | erlaubte `sub`-Claims; ohne Wert kommt jeder herein, dem dein IdP einen Token ausstellt |
 | `MCP_PUBLIC_URL` | bei eigener Domain | deine kanonische `/mcp`-URL, gleichzeitig die Host-/Origin-Positivliste |
 | `MCP_ALLOWED_HOSTS` | nein | weitere Hostnamen, die im `Host`-Header erlaubt sind |
 | `MCP_ALLOWED_ORIGINS` | nein | Hostnamen, die im `Origin`-Header erlaubt sind |

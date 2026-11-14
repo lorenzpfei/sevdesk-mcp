@@ -55,6 +55,8 @@ export interface OAuthConfig {
   jwksUri?: string;
   /** Scopes every token must carry. Empty means scopes are not checked. */
   requiredScopes: string[];
+  /** `sub` claims allowed in. Empty means every subject the issuer signs for is let in. */
+  allowedSubjects: string[];
 }
 
 export interface AuthConfig {
@@ -144,12 +146,17 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
       issuer: issuer.replace(/\/+$/, ""),
       audience,
       jwksUri: env.MCP_OAUTH_JWKS_URI?.trim() || undefined,
-      requiredScopes: (env.MCP_OAUTH_SCOPES ?? "")
-        .split(/[,\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean),
+      requiredScopes: splitList(env.MCP_OAUTH_SCOPES),
+      allowedSubjects: splitList(env.MCP_OAUTH_SUBJECTS),
     },
   };
+}
+
+function splitList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /** Pull the bearer token out of an `Authorization` header. */
@@ -441,7 +448,8 @@ function scopesOf(payload: Record<string, unknown>): string[] {
 
 /**
  * A {@link VerifyToken} that validates JWT access tokens against the
- * issuer's JWKS. Checks signature, `iss`, `aud`, `exp` and `nbf`; scope
+ * issuer's JWKS. Checks signature, `iss`, `aud`, `exp`, `nbf` and, when
+ * configured, `sub` against the allowlist; scope
  * enforcement is left to the SDK's bearer-auth layer, which knows the
  * configured `requiredScopes`.
  */
@@ -531,6 +539,12 @@ export function createJwtVerifier(oauth: OAuthConfig, hooks: JwtVerifierHooks = 
     if (exp + skew < nowSec) throw invalidToken("Token has expired.");
     if (typeof payload.nbf === "number" && payload.nbf - skew > nowSec) {
       throw invalidToken("Token is not valid yet.");
+    }
+    if (
+      oauth.allowedSubjects.length > 0 &&
+      (typeof payload.sub !== "string" || !oauth.allowedSubjects.includes(payload.sub))
+    ) {
+      throw invalidToken(`Token subject '${String(payload.sub)}' is not in MCP_OAUTH_SUBJECTS.`);
     }
 
     const clientId =

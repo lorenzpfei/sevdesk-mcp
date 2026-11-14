@@ -198,6 +198,7 @@ first.
 | `MCP_OAUTH_AUDIENCE` | with `oauth` | audience your IdP issues tokens for, normally your `/mcp` URL |
 | `MCP_OAUTH_JWKS_URI` | no | JWKS endpoint; discovered from the issuer when unset |
 | `MCP_OAUTH_SCOPES` | no | scopes every token must carry |
+| `MCP_OAUTH_SUBJECTS` | no | `sub` claims allowed in; unset lets in everyone your IdP signs a token for |
 | `MCP_PUBLIC_URL` | on a custom domain | your canonical `/mcp` URL; also the Host/Origin allowlist |
 | `MCP_ALLOWED_HOSTS` | no | extra hostnames accepted in `Host` |
 | `MCP_ALLOWED_ORIGINS` | no | hostnames accepted in `Origin` |

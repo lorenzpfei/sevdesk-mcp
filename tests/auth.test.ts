@@ -28,6 +28,7 @@ function oauthConfig(overrides: Partial<OAuthConfig> = {}): OAuthConfig {
     audience: AUDIENCE,
     jwksUri: `${ISSUER}/.well-known/jwks.json`,
     requiredScopes: [],
+    allowedSubjects: [],
     ...overrides,
   };
 }
@@ -86,10 +87,17 @@ describe("loadAuthConfig", () => {
         MCP_OAUTH_ISSUER: `${ISSUER}/`,
         MCP_OAUTH_AUDIENCE: AUDIENCE,
         MCP_OAUTH_SCOPES: "mcp:read, mcp:write",
+        MCP_OAUTH_SUBJECTS: "user-1, user-2",
       } as NodeJS.ProcessEnv),
     ).toEqual({
       mode: "oauth",
-      oauth: { issuer: ISSUER, audience: AUDIENCE, jwksUri: undefined, requiredScopes: ["mcp:read", "mcp:write"] },
+      oauth: {
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksUri: undefined,
+        requiredScopes: ["mcp:read", "mcp:write"],
+        allowedSubjects: ["user-1", "user-2"],
+      },
     });
   });
 });
@@ -509,6 +517,30 @@ describe("the authenticated MCP endpoint", () => {
       (await handler.fetch(post(listTools, { headers: { Authorization: `Bearer ${full}` } })))
         .status,
     ).toBe(200);
+  });
+
+  it("refuses a validly signed token whose subject is not on the allowlist", async () => {
+    const { handler, issuer } = await authenticatedHandler({ allowedSubjects: ["user-1"] });
+    const stranger = await issuer.sign(claims({ sub: "user-2" }));
+    expect(
+      (await handler.fetch(post(listTools, { headers: { Authorization: `Bearer ${stranger}` } })))
+        .status,
+    ).toBe(401);
+
+    const owner = await issuer.sign(claims());
+    expect(
+      (await handler.fetch(post(listTools, { headers: { Authorization: `Bearer ${owner}` } })))
+        .status,
+    ).toBe(200);
+  });
+
+  it("refuses a token without a subject when an allowlist is set", async () => {
+    const { handler, issuer } = await authenticatedHandler({ allowedSubjects: ["user-1"] });
+    const anonymous = await issuer.sign(claims({ sub: undefined }));
+    expect(
+      (await handler.fetch(post(listTools, { headers: { Authorization: `Bearer ${anonymous}` } })))
+        .status,
+    ).toBe(401);
   });
 
   it("never reaches sevDesk for a refused request", async () => {
